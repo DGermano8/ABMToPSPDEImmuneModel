@@ -1,0 +1,213 @@
+clc;
+% close all;
+clear all;
+
+purple_colour = 1/255*[131, 96, 150];
+red_colour = 1/255*[237, 123, 123];
+yellow_colour = 1/255*[240, 184, 110];
+blue_colour = 1/255*[106 123 237];
+green_colour = 1/255*[77 150 138];
+back_colour = 1/255*[56 56 56];
+
+
+%%
+
+ModelParams = struct();
+
+domainBoundary = struct();
+domainBoundary.x_max =  7;
+domainBoundary.y_max =  7;
+domainBoundary.x_min =  0;
+domainBoundary.y_min =  0;
+
+ModelParams.T_final = 500;
+ModelParams.p_move = 0.5;
+
+% ChemoTaxis params
+ModelParams.C_sens = 0.5;             % Taxis sensitivity coefficient
+ModelParams.C_scaling = 0.001;
+
+% DCs
+ModelParams.NumDCs = 1;
+ModelParams.R_DC = 1.00;
+ModelParams.numberOfClusters = 1;
+
+% T-cells
+ModelParams.P_A = 0.5; % Antigen gain rate
+ModelParams.P_D = 0.5;  % Antigen loss rate
+ModelParams.activatedAge  = 50;
+
+ModelParams.dx_ABM = 0.25;
+ModelParams.dy_ABM = 0.25;
+ModelParams.dt_ABM = 0.025;            % Time step
+ModelParams.da_ABM = 1;            % Time step
+ModelParams.NumbAgents = 100000;
+
+ModelParams.dx_PDE = 0.25;
+ModelParams.dy_PDE = 0.25;
+ModelParams.dt_PDE = 0.025;
+ModelParams.da_PDE = 1;
+
+ModelParams.plot_traj = true;
+recordRate = 25/ModelParams.dt_PDE;
+ModelParams.t_plot = recordRate/ModelParams.dt_ABM;
+
+
+rndSeed = 4;
+
+[u, ~, dCdx, dCdy, Ic, A_Ic, Inds_Ic_st, params, A] = Phenotype_PDE_SetUp(rndSeed,domainBoundary,ModelParams);
+activation_proportion_pheno = zeros(params.nt,1);
+x = linspace(0, params.Lx, params.Nx);
+y = linspace(0, params.Ly, params.Ny);
+% a = linspace(0, 1, params.Na);
+a = linspace(0, params.La, params.Na);
+
+
+[walker_positions, walker_activation, C, DCLingerTime, DC_model, params_ABM] = Discrete_SetUp(rndSeed,domainBoundary,ModelParams);
+activatedCells_ABM = zeros(params_ABM.nt,1);
+
+% [walker_positions, walker_activation, U, C, Ap, DCLingerTime] = computeABMModel_Vectorized(walker_positions, walker_activation, C, DCLingerTime, DC_model, params_ABM);
+
+cmap = myColour3Gradient(params.nt/recordRate + 1,yellow_colour, red_colour, purple_colour);
+c_it = 0;
+
+tic;
+figure;
+for n=0:params.nt
+    n
+
+    u = computePhenotypeModel(u, dCdx, dCdy, A, Inds_Ic_st, A_Ic, params);
+    % activation_proportion_pheno(n) = squeeze(sum(u,[1,2]))'*a';
+    activation_proportion_pheno(n+1) = squeeze(sum(u,[1,2]))'*a'/params.activatedAge;
+    
+    % [walker_positions, walker_activation, U, C, Ap, DCLingerTime] = computeABMModel_Vectorized(walker_positions, walker_activation, C, DCLingerTime, DC_model, params_ABM);
+    [walker_positions, walker_activation, C, DCLingerTime] = computeABMModel_Vectorized(walker_positions, walker_activation, C, DCLingerTime, DC_model, params_ABM);
+    activatedCells_ABM(n+1) = sum(walker_activation(:))/(params_ABM.activatedAge*params_ABM.num_walkers);
+
+    if true && mod(n,recordRate)==0
+        % figure;
+        % clf;
+        c_it = c_it + 1;
+
+         A_abm = zeros(params_ABM.Ny, params_ABM.Nx);
+        U_abm = zeros(params_ABM.Ny, params_ABM.Nx);
+        for i = 1:params_ABM.num_walkers
+            id_x_i = round(walker_positions(i,1)/params_ABM.dx) + 1;
+            id_y_i = round(walker_positions(i,2)/params_ABM.dy) + 1;
+        
+            U_abm(id_y_i,id_x_i) = U_abm(id_y_i,id_x_i) + 1;
+            A_abm(id_y_i,id_x_i) = A_abm(id_y_i,id_x_i) + walker_activation(i);
+        end
+        A_plot = zeros(size(U_abm));
+        for ii=1:size(U_abm,1)
+            for jj=1:size(U_abm,2)
+                if U_abm(jj,ii) > 0 
+                    A_plot(jj,ii) = A_abm(jj,ii)/(params_ABM.activatedAge*U_abm(jj,ii));
+                end
+            end
+        end
+            
+        Ic = DC_model.Ic;
+        U_plot = (U_abm/params_ABM.num_walkers);
+        U_plot_1 = U_plot;
+        % U_plot_1(Ic == 1) = nan;
+
+        tmp_act = (A_plot).*U_plot;
+
+        u_slice = squeeze(sum(u,3));
+
+        av_a = zeros(params.Nx, params.Ny);
+        for ix=1:params.Nx
+            for iy=1:params.Ny
+                av_a(ix,iy) = a*squeeze(u(ix,iy,:));
+            end
+        end
+        av_a = av_a/(params.activatedAge*sum(u(:)));
+        % av_a = av_a/(sum(u(:)));
+        
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        x_cont = 1.5*10^-3;
+
+        ax1 = subplot(1,4,1);
+        hold on;
+        
+        contour(ax1, x, y, u_slice', [x_cont, x_cont] , ...
+            'linewidth',2, 'LineStyle', '-', 'EdgeColor',back_colour);
+        contour(ax1, x, y, U_plot_1, [x_cont, x_cont], ...
+            'linewidth',2, 'LineStyle', '--', 'EdgeColor',cmap(c_it,:), 'EdgeAlpha', 0.2);
+
+        ax1.XTick = [];
+        ax1.YTick = [];
+        xlabel('x', 'FontSize',14, 'Interpreter','latex');
+        ylabel('y', 'FontSize',14, 'Interpreter','latex');
+        axis([0 params.Lx 0 params.Ly])
+        title('T cell density', 'FontSize',14, 'Interpreter','latex')
+
+
+        
+        a_cont = 2.5*10^-4;
+        % a_cont = -7.5;
+        ax2 = subplot(1,4,2);
+        hold on;
+        
+        contour(ax2, x, y, (av_a)',   [a_cont, a_cont] , ...
+            'linewidth',2, 'LineStyle', '-', 'EdgeColor',back_colour);
+        contour(ax2, x, y, (tmp_act), [a_cont, a_cont], ...
+            'linewidth',2, 'LineStyle', '--','EdgeColor',cmap(c_it,:), 'EdgeAlpha', 0.2);
+
+        % contour(ax2, x, y, av_a','ShowText','on');
+        ax2.XTick = [];
+        ax2.YTick = [];
+        axis([0 params.Lx 0 params.Ly])
+        xlabel('x', 'FontSize',14, 'Interpreter','latex');
+        ylabel('y', 'FontSize',14, 'Interpreter','latex');
+        title('Average antigen density', 'FontSize',14, 'Interpreter','latex')
+
+
+        
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
+        
+        
+
+        
+    
+        ax6 = subplot(1,4,3);
+        hold on;
+        [N_A, A_edges] = histcounts(walker_activation,-0.5:1:(params_ABM.activatedAge+0.5));
+        plot(a, 1/(params.da)*squeeze(sum(u,[1,2])), 'LineStyle', '-' , 'LineWidth',2, 'Color',back_colour)
+        plot(ax6, 0:1:params_ABM.activatedAge, N_A/ModelParams.NumbAgents,'--','LineWidth',2, 'Color',cmap(c_it,:))
+        title('Accumulated antigen distribution', 'FontSize',14, 'Interpreter','latex')
+        axis([0 ModelParams.activatedAge 0 1])
+        xlabel('a', 'FontSize',14, 'Interpreter','latex');
+
+
+        ax3 = subplot(1,4,4);
+        hold on
+        plot(ModelParams.dt_PDE*(0:n),activation_proportion_pheno(1:(n+1)), 'LineStyle', '-', 'LineWidth',2 ,'Color',back_colour)
+        plot(ax3, ModelParams.dt_ABM*(0:n), activatedCells_ABM(1:(n+1)),'--','LineWidth',2.5, 'Color',yellow_colour)
+        xlabel('Time', 'FontSize',14, 'Interpreter','latex'); 
+        % ylabel('Total activation');
+        axis([0 ModelParams.T_final 0 1])
+        title('Proportion of T cell activation', 'FontSize',14, 'Interpreter','latex')
+
+
+       
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
+        % sgtitle(['time = ', num2str(params.dt*n), ' mass = ', num2str(sum(u(:)))])
+        drawnow;
+    end
+
+
+end
+
+toc;
+
+%%
+f = gcf;
+f.Color = [1 1 1];
+f.Position = [1728 381 1215 250];
+export_fig 2D_SingleDC.png -m2.5
+
